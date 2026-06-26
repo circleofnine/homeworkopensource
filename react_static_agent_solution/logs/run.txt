@@ -1,0 +1,53 @@
+Task: 静态分析 targets/challenge。只使用工具返回的信息，判断是否存在漏洞。
+
+Round 1
+Thought: 先不急着下结论。我先看导入表和字符串，确定这类程序主要处理什么输入，以及有没有危险库函数。
+Action: r2_imports_strings({})
+Observation:
+{
+  "raw": "     2: 0000000000000000     0 FUNC    GLOBAL DEFAULT  UND free@GLIBC_2.2.5 (3)\n     4: 0000000000000000     0 FUNC    GLOBAL DEFAULT  UND strlen@GLIBC_2.2.5 (3)\n     6: 0000000000000000     0 FUNC    GLOBAL DEFAULT  UND strcspn@GLIBC_2.2.5 (3)\n     7: 0000000000000000     0 FUNC    GLOBAL DEFAULT  UND fgets@GLIBC_2.2.5 (3)\n     9: 0000000000000000     0 FUNC    GLOBAL DEFAULT  UND malloc@GLIBC_2.2.5 (3)\n    10: 0000000000000000     0 FUNC    GLOBAL DEFAULT  UND __strcpy_chk@GLIBC_2.3.4 (2)\n    511 fgets\n    517 malloc\n    51e strcspn\n    554 free\n    559 __strcpy_chk\n    566 strlen\n   1287 selftestH\n   200c profile-service ready\n   2027 selftest"
+}
+
+Round 2
+Thought: 导入里有 fgets、strlen、strcspn 和 __strcpy_chk。下一步看主逻辑附近的反编译，重点确认 stdin 读入后是不是直接流向拷贝点。
+Action: ghidra_search_decomp({"keywords": ["fgets", "strcpy", "strlen"]})
+Observation:
+{
+  "keywords": [
+    "fgets",
+    "strcpy",
+    "strlen"
+  ],
+  "hits": [
+    {
+      "name": "FUN_00401264",
+      "entry": "00401264",
+      "decomp": "undefined8 FUN_00401264(int argc)\n{\n  char small[16];\n  char line[128];\n  log_msg(\"boot\", \"profile-service ready\");\n  strcpy(line, \"selftest-payload-ok\");\n  log_msg(\"selftest\", line);\n  if (argc > 100) { p = malloc(0x200); if (p != 0) free(p); }\n  if (fgets(line, 0x80, stdin) == 0) return 0;\n  line[strcspn(line, \"\\n\")] = 0;\n  if (strlen(line) - 1 <= 99) {\n      __strcpy_chk(small, line, 0x10);\n  }\n  return 0;\n}"
+    }
+  ]
+}
+
+Round 3
+Thought: Ghidra 结果显示有 line[128] 到 small[16] 的拷贝。为了避免只相信伪代码，我再用 r2 看对应地址附近的汇编参数。
+Action: r2_disasm({"addr": "0x401264", "size": 90})
+Observation:
+{
+  "addr": "0x401264",
+  "raw": "401264:\tf3 0f 1e fa          \tendbr64\n  401268:\t53                   \tpush   rbx\n  401269:\t48 81 ec a0 00 00 00 \tsub    rsp,0xa0\n  401270:\t89 fb                \tmov    ebx,edi\n  401272:\t48 8d 35 93 0d 00 00 \tlea    rsi,[rip+0xd93]        # 40200c <__strcpy_chk@plt+0xeec>\n  401279:\t48 8d 3d a2 0d 00 00 \tlea    rdi,[rip+0xda2]        # 402022 <__strcpy_chk@plt+0xf02>\n  401280:\te8 91 ff ff ff       \tcall   401216 <__strcpy_chk@plt+0xf6>\n  401285:\t48 b8 73 65 6c 66 74 \tmovabs rax,0x74736574666c6573\n  40128c:\t65 73 74 \n  40128f:\t48 ba 2d 70 61 79 6c \tmovabs rdx,0x64616f6c7961702d\n  401296:\t6f 61 64 \n  401299:\t48 89 04 24          \tmov    QWORD PTR [rsp],rax\n  40129d:\t48 89 54 24 08       \tmov    QWORD PTR [rsp+0x8],rdx\n  4012a2:\t48 c7 44 24 10 2d 6f \tmov    QWORD PTR [rsp+0x10],0x6b6f2d\n  4012a9:\t6b 00 \n  4012ab:\t48 c7 44 24 18 00 00 \tmov    QWORD PTR [rsp+0x18],0x0\n  4012b2:\t00 00 \n  4012b4:\t48 8d 74 24 20       \tlea    rsi,[rsp+0x20]\n  4012b9:\t48 c7 44 24 40 00 00 \tmov    QWORD PTR [rsp+0x40],0x0\n  4012c0:\t00 00 \n  4012c2:\t48 c7 44 24 48 00 00 \tmov    QWORD PTR [rsp+0x48],0x0\n  4012c9:\t00 00 \n  4012cb:\t48 c7 44 24 50 00 00 \tmov    QWORD PTR [rsp+0x50],0x0\n  4012d2:\t00 00 \n  4012d4:\t48 c7 44 24 58 00 00 \tmov    QWORD PTR [rsp+0x58],0x0\n  4012db:\t00 00 \n  4012dd:\t48 89 44 24 20       \tmov    QWORD PTR [rsp+0x20],rax\n  4012e2:\t48 89 54 24 28       \tmov    QWORD PTR [rsp+0x28],rdx\n  4012e7:\t48 c7 44 24 30 2d 6f \tmov    QWORD PTR [rsp+0x30],0x6b6f2d\n  4012ee:\t6b 00 \n  4012f0:\t48 c7 44 24 38 00 00 \tmov    QWORD PTR [rsp+0x38],0x0\n  4012f7:\t00 00 \n  4012f9:\t48 8d 3d 27 0d 00 00 \tlea    rdi,[rip+0xd27]        # 402027 <__strcpy_chk@plt+0xf07>\n  401300:\te8 11 ff ff ff       \tcall   401216 <__strcpy_chk@plt+0xf6>\n  401305:\t83 fb 64             \tcmp    ebx,0x64\n  401308:\t7f 54                \tjg     40135e <__strcpy_chk@plt+0x23e>\n  40130a:\t48 8d 7c 24 20       \tlea    rdi,[rsp+0x20]\n  40130f:\t48 8b 15 6a 2d 00 00 \tmov    rdx,QWORD PTR [rip+0x2d6a]        # 404080 <stdin@GLIBC_2.2.5>\n  401316:\tbe 80 00 00 00       \tmov    esi,0x80\n  40131b:\te8 e0 fd ff ff       \tcall   401100 <fgets@plt>\n  401320:\t48 85 c0             \ttest   rax,rax\n  401323:\t74 2b                \tje     401350 <__strcpy_chk@plt+0x230>\n  401325:\t48 8d 5c 24 20       \tlea    rbx,[rsp+0x20]\n  40132a:\t48 8d 35 ff 0c 00 00 \tlea    rsi,[rip+0xcff]        # 402030 <__strcpy_chk@plt+0xf10>\n  401331:\t48 89 df             \tmov    rdi,rbx\n  401334:\te8 b7 fd ff ff       \tcall   4010f0 <strcspn@plt>\n  401339:\tc6 44 04 20 00       \tmov    BYTE PTR [rsp+rax*1+0x20],0x0\n  40133e:\t48 89 df             \tmov    rdi,rbx\n  401341:\te8 8a fd ff ff       \tcall   4010d0 <strlen@plt>\n  401346:\t48 83 e8 01          \tsub    rax,0x1\n  40134a:\t48 83 f8 63          \tcmp    rax,0x63\n  40134e:\t76 27                \tjbe    401377 <__strcpy_chk@plt+0x257>\n  401350:\tb8 00 00 00 00       \tmov    eax,0x0\n  401355:\t48 81 c4 a0 00 00 00 \tadd    rsp,0xa0\n  40135c:\t5b                   \tpop    rbx\n  40135d:\tc3                   \tret\n  40135e:\tbf 00 02 00 00       \tmov    edi,0x200\n  401363:\te8 a8 fd ff ff       \tcall   401110 <malloc@plt>\n  401368:\t48 89 c7             \tmov    rdi,rax\n  40136b:\t48 85 c0             \ttest   rax,rax\n  40136e:\t74 9a                \tje     40130a <__strcpy_chk@plt+0x1ea>\n  401370:\te8 4b fd ff ff       \tcall   4010c0 <free@plt>\n  401375:\teb 93                \tjmp    40130a <__strcpy_chk@plt+0x1ea>\n  401377:\t48 89 de             \tmov    rsi,rbx\n  40137a:\t48 89 e7             \tmov    rdi,rsp\n  40137d:\tba 10 00 00 00       \tmov    edx,0x10\n  401382:\te8 99 fd ff ff       \tcall   401120 <__strcpy_chk@plt>\n  401387:\teb c7                \tjmp    401350 <__strcpy_chk@plt+0x230>\n\nDisassembly of section .fini:\n\n000000000040138c <.fini>:\n  40138c:\tf3 0f 1e fa          \tendbr64\n  401390:\t48 83 ec 08          \tsub    rsp,0x8\n  401394:\t48 83 c4 08          \tadd    rsp,0x8\n  401398:\tc3                   \tret"
+}
+
+Round 4
+Thought: r2 里 0x401377 到 0x401382 的调用参数比较清楚：rsi 是用户输入缓冲区，rdi 是 rsp 上的小缓冲区，edx 是 0x10，所以 sink 可以定位。
+Action: r2_disasm({"addr": "0x401377", "size": 24})
+Observation:
+{
+  "addr": "0x401377",
+  "raw": "401377:\t48 89 de             \tmov    rsi,rbx\n  40137a:\t48 89 e7             \tmov    rdi,rsp\n  40137d:\tba 10 00 00 00       \tmov    edx,0x10\n  401382:\te8 99 fd ff ff       \tcall   401120 <__strcpy_chk@plt>\n  401387:\teb c7                \tjmp    401350 <__strcpy_chk@plt+0x230>\n\nDisassembly of section .fini:\n\n000000000040138c <.fini>:\n  40138c:\tf3 0f 1e fa          \tendbr64\n  401390:\t48 83 ec 08          \tsub    rsp,0x8\n  401394:\t48 83 c4 08          \tadd    rsp,0x8\n  401398:\tc3                   \tret"
+}
+
+Final Answer:
+{
+  "vuln_type": "stack_buffer_overflow",
+  "location": "FUN_00401264 / 0x401382 (__strcpy_chk)",
+  "cause": "stdin 输入经 fgets 读入 0x80 字节缓冲区并去除换行后，在长度仍可超过 16 字节时被复制到栈上 16 字节目标缓冲区。"
+}

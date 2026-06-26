@@ -1,0 +1,5 @@
+{
+  "vuln_type": "stack_buffer_overflow",
+  "location": "FUN_00401264 / 0x401382 (__strcpy_chk)",
+  "cause": "stdin 输入经 fgets 读入 0x80 字节缓冲区并去除换行后，在长度仍可超过 16 字节时被复制到栈上 16 字节目标缓冲区。"
+}
